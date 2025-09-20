@@ -1,0 +1,331 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Manager</title>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .connected {
+            background-color: #4CAF50;
+        }
+        .disconnected {
+            background-color: #F44336;
+        }
+        .master-controls {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .start-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .stop-btn {
+            background-color: #F44336;
+            color: white;
+        }
+        .master-start {
+            background-color: #2196F3;
+            color: white;
+        }
+        .master-stop {
+            background-color: #FF9800;
+            color: white;
+        }
+        .terminals-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+        .terminal {
+            background-color: #000;
+            color: #0F0;
+            font-family: 'Courier New', monospace;
+            padding: 15px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .terminal-controls {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .terminal-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        .terminal-status {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .running {
+            color: #4CAF50;
+        }
+        .stopped {
+            color: #F44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Terminal Manager</h1>
+                <div id="connection-status">
+                    <span class="status-indicator disconnected" id="status-indicator"></span>
+                    <span id="status-text">Disconnected from server</span>
+                </div>
+            </div>
+            <div class="master-controls">
+                <button class="master-start" onclick="startAll()">Master Start</button>
+                <button class="master-stop" onclick="stopAll()">Master Stop</button>
+            </div>
+        </div>
+
+        <div class="terminals-grid">
+            {% for id, term in terminals.items() %}
+            <div class="terminal-card">
+                <div class="terminal-title">Terminal {{ id }}: {{ term.name }}</div>
+                <div class="terminal-controls">
+                    <button class="start-btn" onclick="startTerminal({{ id }})">Start</button>
+                    <button class="stop-btn" onclick="stopTerminal({{ id }})">Stop</button>
+                    <span class="terminal-status" id="status-{{ id }}">Stopped</span>
+                </div>
+                <div class="terminal" id="terminal-{{ id }}"></div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script>
+        // Connect to the SocketIO server
+        const socket = io();
+        let connected = false;
+        
+        // Update connection status
+        socket.on('connect', function() {
+            connected = true;
+            updateConnectionStatus(true);
+            console.log('Connected to server');
+            
+            // Load initial terminal outputs
+            for (let i = 1; i <= 6; i++) {
+                loadTerminalOutput(i);
+                checkTerminalStatus(i);
+            }
+        });
+        
+        socket.on('disconnect', function() {
+            connected = false;
+            updateConnectionStatus(false);
+            console.log('Disconnected from server');
+        });
+        
+        socket.on('connection_status', function(data) {
+            connected = data.status === 'connected';
+            updateConnectionStatus(connected);
+        });
+        
+        // Handle terminal output updates
+        socket.on('terminal_output', function(data) {
+            const terminal = document.getElementById(`terminal-${data.id}`);
+            if (terminal) {
+                terminal.textContent += data.output;
+                // Keep only the last few lines
+                const lines = terminal.textContent.split('\n');
+                if (lines.length > 5) {
+                    terminal.textContent = lines.slice(-5).join('\n');
+                }
+                // Auto-scroll to bottom
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        });
+        
+        function updateConnectionStatus(isConnected) {
+            const indicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            
+            if (isConnected) {
+                indicator.className = 'status-indicator connected';
+                statusText.textContent = 'Connected to server';
+            } else {
+                indicator.className = 'status-indicator disconnected';
+                statusText.textContent = 'Disconnected from server';
+            }
+        }
+        
+        // Function to start a specific terminal
+        function startTerminal(id) {
+            if (!connected) {
+                alert('Not connected to server');
+                return;
+            }
+            
+            axios.post(`/start_terminal/${id}`)
+                .then(response => {
+                    console.log(`Terminal ${id} started:`, response.data);
+                    checkTerminalStatus(id);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to start terminal');
+                });
+        }
+        
+        // Function to stop a specific terminal
+        function stopTerminal(id) {
+            if (!connected) {
+                alert('Not connected to server');
+                return;
+            }
+            
+            axios.post(`/stop_terminal/${id}`)
+                .then(response => {
+                    console.log(`Terminal ${id} stopped:`, response.data);
+                    checkTerminalStatus(id);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to stop terminal');
+                });
+        }
+        
+        // Function to start all terminals
+        function startAll() {
+            if (!connected) {
+                alert('Not connected to server');
+                return;
+            }
+            
+            axios.post('/start_all')
+                .then(response => {
+                    console.log('All terminals started:', response.data);
+                    for (let i = 1; i <= 6; i++) {
+                        checkTerminalStatus(i);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to start all terminals');
+                });
+        }
+        
+        // Function to stop all terminals
+        function stopAll() {
+            if (!connected) {
+                alert('Not connected to server');
+                return;
+            }
+            
+            axios.post('/stop_all')
+                .then(response => {
+                    console.log('All terminals stopped:', response.data);
+                    for (let i = 1; i <= 6; i++) {
+                        checkTerminalStatus(i);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to stop all terminals');
+                });
+        }
+        
+        // Function to load terminal output
+        function loadTerminalOutput(id) {
+            axios.get(`/terminal_output/${id}`)
+                .then(response => {
+                    const terminal = document.getElementById(`terminal-${id}`);
+                    if (terminal) {
+                        terminal.textContent = response.data.output;
+                        terminal.scrollTop = terminal.scrollHeight;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading terminal output:', error);
+                });
+        }
+        
+        // Function to check terminal status
+        function checkTerminalStatus(id) {
+            axios.get(`/terminal_status/${id}`)
+                .then(response => {
+                    const statusElement = document.getElementById(`status-${id}`);
+                    if (statusElement) {
+                        if (response.data.running) {
+                            statusElement.textContent = 'Running';
+                            statusElement.className = 'terminal-status running';
+                        } else {
+                            statusElement.textContent = 'Stopped';
+                            statusElement.className = 'terminal-status stopped';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking terminal status:', error);
+                });
+        }
+        
+        // Periodically check server connection status
+        setInterval(() => {
+            axios.get('/health')
+                .then(response => {
+                    if (response.data.status === 'ok' && !connected) {
+                        // Try to reconnect
+                        socket.connect();
+                    }
+                })
+                .catch(error => {
+                    console.log('Server connection lost');
+                    updateConnectionStatus(false);
+                });
+        }, 3000);
+        
+        // Periodically check terminal status
+        setInterval(() => {
+            if (connected) {
+                for (let i = 1; i <= 6; i++) {
+                    checkTerminalStatus(i);
+                }
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
